@@ -6,8 +6,6 @@
 
 const http = require('node:http');
 
-// Port used when PORT is not set, the accepted port range, and how long shutdown waits before
-// force-closing connections that are still open.
 const DEFAULT_PORT = 3000;
 const MIN_PORT = 1024;
 const MAX_PORT = 65535;
@@ -116,7 +114,7 @@ function handleRequestError(error, response) {
   } catch {
     // Checking or converting the value can itself throw, for example for a Symbol, for an object created with
     // Object.create(null), or for a revoked Proxy. The backstop must not fail, so such a value is named by its
-    // type and the response below is still completed.
+    // type and the backstop still reaches the safe-response or abort path below.
     console.error(`Request handling failed: a thrown ${typeof error} could not be converted to text`);
   }
   if (!response.headersSent) {
@@ -151,7 +149,7 @@ function trackResponse(openConnections, request, response) {
   });
 }
 
-// Rejects a CONNECT request without tunnelling: logs it, then sends the fixed 404 once earlier responses flush.
+// Rejects a CONNECT without tunnelling: logs it, sends the fixed 404 once earlier responses flush, then times it out.
 function handleConnect(openConnections, request, socket) {
   // A socket handed to the 'connect' event has no error handler, so a client reset would crash the process.
   // A reset on a rejected tunnel is a client-side event, not a server fault, so nothing is written to stderr.
@@ -172,6 +170,18 @@ function handleConnect(openConnections, request, socket) {
     if (openConnections.get(socket) === socket) {
       const body = 'Not Found';
       socket.end(`HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+      // The socket has left Node.js's HTTP machinery, so none of its timeouts applies, and a client that never reads
+      // the reply or never closes its side would hold the socket and its file descriptor indefinitely. The timer
+      // gives such a client the same SHUTDOWN_TIMEOUT_MS that shutdown gives, and unref() keeps it from delaying an
+      // exit that is already possible. It acts only while the entry is still the socket: a closed connection has no
+      // entry, and once shutdown has half-closed the connection the entry is true and shutdown's fallback is the
+      // deadline instead.
+      const closeTimer = setTimeout(() => {
+        if (openConnections.get(socket) === socket) {
+          socket.destroy();
+        }
+      }, SHUTDOWN_TIMEOUT_MS);
+      closeTimer.unref();
     }
   };
   // Responses to requests pipelined ahead of the CONNECT may still be queued inside Node.js. The latest of them
@@ -198,7 +208,7 @@ function handleServerError(error, port, server, openConnections) {
   stopServer(server, openConnections, 1);
 }
 
-// Handles CTRL+C: logs the shutdown, then stops the server with exit code 0.
+// Handles CTRL+C: logs the shutdown and requests exit code 0 without clearing an earlier server failure.
 function handleSigint(server, openConnections) {
   console.log('Received SIGINT, shutting down server');
   stopServer(server, openConnections, 0);
@@ -216,25 +226,28 @@ function closeWhenFlushed(openConnections, socket) {
     socket.destroy();
     return;
   }
-  // The latest output, a response or a CONNECT socket, is still being written. end() returning, or
-  // writableEnded, does not mean the output was delivered; only writableFinished and the 'finish' event do.
-  // A CONNECT socket finishes only once its reply is written and flushed, so shutdown never half-closes it
-  // before the reply is queued. After 'finish' the check runs again, because a pipelined request may have
-  // produced a newer response, or a CONNECT, in the meantime.
+  // The latest output, a response or a CONNECT socket, is still being written. end() returning, or writableEnded,
+  // does not mean the output has been handed to the operating system; only writableFinished and the 'finish'
+  // event do. A CONNECT socket finishes only once its reply has been written and handed over, so shutdown never
+  // half-closes it before the reply is queued. After 'finish' the check runs again, because a pipelined request
+  // may have produced a newer response, or a CONNECT, in the meantime.
   if (pendingOutput !== true && !pendingOutput.writableFinished) {
     pendingOutput.once('finish', () => closeWhenFlushed(openConnections, socket));
     return;
   }
-  // Everything owed is on the socket. Half-close: the FIN follows every byte already written to the socket,
-  // so a just-finished response or a CONNECT reply still arrives. Ending an already-ended CONNECT socket
-  // again is harmless.
+  // Everything owed has been handed to the operating system. The entry becomes true to mark the connection as
+  // half-closed by shutdown, so a CONNECT socket's own close timer stands down and shutdown's fallback is the
+  // deadline instead.
+  openConnections.set(socket, true);
+  // Half-close: the FIN is queued behind every byte already handed to the operating system, so it never overtakes
+  // a just-finished response or a CONNECT reply, but nothing guarantees that the client receives them. Ending an
+  // already-ended CONNECT socket again is harmless.
   socket.end();
 }
 
-// Stops accepting connections, closes every open connection once its output has flushed, and lets the
-// process exit with the given code.
+// Stops the listener, drains sockets with a forced-cleanup fallback, and preserves any fatal exit status.
 function stopServer(server, openConnections, exitCode) {
-  // The process ends on its own once the event loop is empty, with this exit code.
+  // The exit code is only recorded here; the process ends on its own once the event loop is empty.
   // process.exit() is not called, because it can cut off output still queued on a POSIX pipe.
   // A shutdown already under way for a server error keeps exit code 1, even if CTRL+C follows.
   if (process.exitCode !== 1) {
@@ -258,10 +271,10 @@ function stopServer(server, openConnections, exitCode) {
 function startServer(port) {
   // Every open connection, mapped to its latest output: null until a request arrives, the latest response
   // while it is still being written, true once it has flushed, and the socket itself after a CONNECT request,
-  // whose reply is written straight to the socket.
+  // whose reply is written straight to the socket. Once shutdown half-closes a connection, its entry is true.
   const openConnections = new Map();
   const server = http.createServer(handleRequest);
-  // Registered after handleRequest, so it runs once the response has been written.
+  // Registered after handleRequest so tracking follows dispatch; output may still be flushing.
   server.on('request', (request, response) => trackResponse(openConnections, request, response));
   // Node.js answers an Expect value other than 100-continue with an empty 417 and skips 'request', unless a
   // 'checkExpectation' listener exists. Re-emitting it on 'request' routes such a request like any other,
