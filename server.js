@@ -169,10 +169,13 @@ function handleConnect(openConnections, request, socket) {
 
 // Reports a server error with an actionable message on stderr, then shuts the server down with exit code 1.
 function handleServerError(error, port, server, openConnections) {
+  // The suggested command must name a port other than the one that failed, or following it would fail
+  // the same way: 8080 as a rule, and 8081 when 8080 itself is the port that failed.
+  const suggestedPort = port === 8080 ? 8081 : 8080;
   if (error.code === 'EADDRINUSE') {
-    console.error(`Startup error: port ${port} is already in use. Stop the process that is using it, or choose another port, for example: PORT=8080 node server.js`);
+    console.error(`Startup error: port ${port} is already in use. Stop the process that is using it, or choose another port, for example: PORT=${suggestedPort} node server.js`);
   } else if (error.code === 'EACCES') {
-    console.error(`Startup error: permission denied while binding to port ${port}. Choose another port between ${MIN_PORT} and ${MAX_PORT}, for example: PORT=8080 node server.js`);
+    console.error(`Startup error: permission denied while binding to port ${port}. Choose another port between ${MIN_PORT} and ${MAX_PORT}, for example: PORT=${suggestedPort} node server.js`);
   } else {
     console.error(`Server error: ${error.message}. Shutting down. Resolve the reported problem, then start the server again with: node server.js`);
   }

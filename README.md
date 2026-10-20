@@ -293,6 +293,10 @@ Another program is already listening on that port, often a copy of this server r
 
 **The server prints a line that starts with `Configuration error:`.** The `PORT` value is invalid. The message shows the value it received and what is allowed. Correct `PORT`, or clear it to use the default port, as described in [Configuration](#configuration).
 
+**The server prints a line that starts with `Server error:`.** The operating system reported a problem that the server cannot work around. The text after `Server error:` names it, including a short error code such as `EMFILE`, which means the server has too many files open; on macOS and Linux every connection counts as an open file. The server then stops accepting connections, closes the open ones as it does for CTRL+C, and exits with status 1. Fix the reported problem, for example by closing programs you no longer need, especially any that are connected to the server, then start the server again with `node server.js`.
+
+**curl reports an error or keeps waiting, but the server is still running and prints nothing new.** The server may have run out of open files. Node.js then closes new connections at once or leaves them waiting, and the server's code is never told, so it prints neither an error nor a request line. Stop the server with CTRL+C, close programs you no longer need, especially any that are connected to the server, and start the server again. On macOS and Linux, `ulimit -n` shows how many files a program started from that terminal may open.
+
 **The terminal reports `command not found` or `not recognized` for `node` or `npm`.** Node.js is not installed, or the terminal cannot find it. Install Node.js as described in [Prerequisites](#prerequisites), then open a new terminal and run `node --version` again.
 
 **curl reports `Failed to connect to localhost port 3000`.** The server is not running, or it listens on another port. Start it as described in [Running the server](#running-the-server), and use the port from its `Server listening on port` line in the URL.
