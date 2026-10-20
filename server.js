@@ -140,31 +140,47 @@ function trackResponse(openConnections, request, response) {
   // close while its response is still flushing.
   const socket = request.socket;
   openConnections.set(socket, response);
-  // Once the latest response has flushed, the socket itself stands in for it: everything owed is on the
-  // socket. A finished response is not kept until the next request, because holding it through keep-alive
-  // idle time makes memory grow under concurrent load. The check skips a connection that has since closed
-  // and one that already has a newer response.
+  // Once the latest response has flushed, true stands in for it: everything owed is on the socket. A finished
+  // response is not kept until the next request, because holding it through keep-alive idle time makes memory
+  // grow under concurrent load. The check skips a connection that has since closed, and one whose latest
+  // output is now a newer response or a CONNECT reply.
   response.once('finish', () => {
     if (openConnections.get(socket) === response) {
-      openConnections.set(socket, socket);
+      openConnections.set(socket, true);
     }
   });
 }
 
-// Rejects a CONNECT request: logs it, answers with the fixed 404 and closes the connection, without tunnelling.
+// Rejects a CONNECT request without tunnelling: logs it, then sends the fixed 404 once earlier responses flush.
 function handleConnect(openConnections, request, socket) {
+  // A socket handed to the 'connect' event has no error handler, so a client reset would crash the process.
+  // A reset on a rejected tunnel is a client-side event, not a server fault, so nothing is written to stderr.
+  // The listener goes on first, because the reply may have to wait for earlier responses.
+  socket.on('error', () => socket.destroy());
   // Node.js emits CONNECT on the 'connect' event, never on 'request'. With no listener it closes the socket
   // without any response, which would skip both the request log and the catch-all 404.
   logRequest(request.method, getRequestPath(request.url));
-  // The reply goes straight to the socket, so the socket itself is the connection's latest output.
+  // What the connection still owed before the CONNECT: null when no request came first, true when every
+  // earlier response has flushed, and otherwise the latest earlier response.
+  const earlierOutput = openConnections.get(socket);
+  // The reply goes straight to the socket, so the socket itself is the connection's latest output. Shutdown
+  // therefore waits for the socket's own 'finish', which follows the reply.
   openConnections.set(socket, socket);
-  // A socket handed to the 'connect' event has no error handler, so a client reset would crash the process.
-  // A reset on a rejected tunnel is a client-side event, not a server fault, so nothing is written to stderr.
-  socket.on('error', () => socket.destroy());
   // The socket has left Node.js's HTTP response machinery, so the 404 is written as a raw HTTP/1.1 message
-  // instead of through sendText.
-  const body = 'Not Found';
-  socket.end(`HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+  // instead of through sendText. It is written only while the connection is still open and tracked.
+  const reply = () => {
+    if (openConnections.get(socket) === socket) {
+      const body = 'Not Found';
+      socket.end(`HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`);
+    }
+  };
+  // Responses to requests pipelined ahead of the CONNECT may still be queued inside Node.js. The latest of them
+  // finishes last, so the reply waits for it; otherwise the raw reply would overtake them and cut them off.
+  if (earlierOutput !== null && earlierOutput !== true && !earlierOutput.writableFinished) {
+    earlierOutput.once('finish', reply);
+  } else {
+    reply();
+  }
 }
 
 // Reports a server error with an actionable message on stderr, then shuts the server down with exit code 1.
@@ -200,10 +216,12 @@ function closeWhenFlushed(openConnections, socket) {
     socket.destroy();
     return;
   }
-  // A response is still being written. end() returning, or writableEnded, does not mean the output was
-  // delivered; only writableFinished and the 'finish' event do. After 'finish' the check runs again, because a
-  // pipelined request may have produced a newer response in the meantime.
-  if (pendingOutput !== socket && !pendingOutput.writableFinished) {
+  // The latest output, a response or a CONNECT socket, is still being written. end() returning, or
+  // writableEnded, does not mean the output was delivered; only writableFinished and the 'finish' event do.
+  // A CONNECT socket finishes only once its reply is written and flushed, so shutdown never half-closes it
+  // before the reply is queued. After 'finish' the check runs again, because a pipelined request may have
+  // produced a newer response, or a CONNECT, in the meantime.
+  if (pendingOutput !== true && !pendingOutput.writableFinished) {
     pendingOutput.once('finish', () => closeWhenFlushed(openConnections, socket));
     return;
   }
@@ -239,7 +257,8 @@ function stopServer(server, openConnections, exitCode) {
 // Creates the server, wires its events, binds it to the port and installs the CTRL+C handler.
 function startServer(port) {
   // Every open connection, mapped to its latest output: null until a request arrives, the latest response
-  // while it is still being written, and the socket itself once everything owed is on the socket.
+  // while it is still being written, true once it has flushed, and the socket itself after a CONNECT request,
+  // whose reply is written straight to the socket.
   const openConnections = new Map();
   const server = http.createServer(handleRequest);
   // Registered after handleRequest, so it runs once the response has been written.
