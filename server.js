@@ -7,8 +7,11 @@
 const http = require('node:http');
 
 const DEFAULT_PORT = 3000;
+
 const MIN_PORT = 1024;
+
 const MAX_PORT = 65535;
+
 const SHUTDOWN_TIMEOUT_MS = 5000;
 
 // Turns the raw PORT environment value into a validated port number, or into an actionable error message.
