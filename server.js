@@ -49,9 +49,17 @@ function resolvePort(rawPort) {
 // Returns the path part of the request target: everything before the first '?', exactly as received.
 function getRequestPath(requestUrl) {
   // The URL constructor is not used: it reads '//hello' as host 'hello' with path '/', and it collapses
-  // dot segments, so '/a/../hello' would match '/hello'.
-  const queryStart = requestUrl.indexOf('?');
-  return queryStart === -1 ? requestUrl : requestUrl.slice(0, queryStart);
+  // dot segments, so '/a/../hello' would match '/hello'. Instead the target is scanned character by
+  // character up to the first '?'. The path collects in a property of a const object, because every
+  // binding in this file is const.
+  const scanned = { path: '' };
+  for (const character of requestUrl) {
+    if (character === '?') {
+      break;
+    }
+    scanned.path += character;
+  }
+  return scanned.path;
 }
 
 // Writes one request log line to stdout: <ISO-8601 timestamp> <HTTP method> <request path>.
@@ -101,7 +109,16 @@ function handleRequest(request, response) {
 
 // Contains a failing route handler: reports the error on stderr and keeps every internal detail out of the response.
 function handleRequestError(error, response) {
-  console.error(`Request handling failed: ${error.message}`);
+  // JavaScript can throw any value, not only an Error, so error.message cannot be assumed. An Error contributes
+  // its message, and any other value, such as a string or null, is converted to text by the template literal.
+  try {
+    console.error(`Request handling failed: ${error instanceof Error ? error.message : error}`);
+  } catch {
+    // Checking or converting the value can itself throw, for example for a Symbol, for an object created with
+    // Object.create(null), or for a revoked Proxy. The backstop must not fail, so such a value is named by its
+    // type and the response below is still completed.
+    console.error(`Request handling failed: a thrown ${typeof error} could not be converted to text`);
+  }
   if (!response.headersSent) {
     sendText(response, 500, 'Internal Server Error');
   } else {
