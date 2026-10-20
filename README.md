@@ -38,7 +38,17 @@ v24.22.0
    cd nodejs-tutorial-hello-world
    ```
 
-   If the folder has a different name or location on your computer, use its path instead.
+   A new terminal usually starts in your home folder. This command works only if the project folder is directly inside the folder the terminal is in. If the folder has a different name or is somewhere else, use its path instead. For example, if the folder is in your Downloads folder:
+
+   ```sh
+   cd ~/Downloads/nodejs-tutorial-hello-world
+   ```
+
+   Here `~` means your home folder. PowerShell accepts the same command. In Command Prompt, use `cd %USERPROFILE%\Downloads\nodejs-tutorial-hello-world` instead.
+
+   To fill in the path without typing it, type `cd` followed by a space. Then drag the project folder from Finder (macOS), File Explorer (Windows) or your file manager (Linux) into the terminal window. Its path appears after `cd`. Press Enter. In Command Prompt, if the folder is on another drive, such as `D:`, type `cd /d` instead of `cd`.
+
+   If the terminal reports `No such file or directory` or a similar error, see [Troubleshooting](#troubleshooting).
 
 There is no `npm install` step. The project has no dependencies, so there is nothing to download.
 
@@ -94,7 +104,7 @@ Expected output:
 Hello world
 ```
 
-The response body has no trailing newline, so your shell prompt appears on the same line, right after `Hello world`.
+The response body has no trailing newline, so the output does not end with a line break. In bash, the usual shell on Linux, your shell prompt appears on the same line, right after `Hello world`. In zsh, the default shell on macOS, a highlighted `%` appears right after `Hello world` and your prompt moves to the next line. The `%` only marks the missing newline; it is not part of the response.
 
 You can also open `http://localhost:3000/hello` in a web browser. The browser may also request `/favicon.ico` on its own; the server logs that request too and answers it with `Not Found`.
 
@@ -298,5 +308,13 @@ Another program is already listening on that port, often a copy of this server r
 **curl reports an error or keeps waiting, but the server is still running and prints nothing new.** The server may have run out of open files. Node.js then closes new connections at once or leaves them waiting, and the server's code is never told, so it prints neither an error nor a request line. Stop the server with CTRL+C, close programs you no longer need, especially any that are connected to the server, and start the server again. On macOS and Linux, `ulimit -n` shows how many files a program started from that terminal may open.
 
 **The terminal reports `command not found` or `not recognized` for `node` or `npm`.** Node.js is not installed, or the terminal cannot find it. Install Node.js as described in [Prerequisites](#prerequisites), then open a new terminal and run `node --version` again.
+
+**The terminal reports `No such file or directory`, `Cannot find module` or `ENOENT`.** The terminal is not in the project folder, the folder that contains `server.js`. The message depends on the command you ran:
+
+- `cd` reports `No such file or directory`. In zsh, the default shell on macOS, it reports `no such file or directory`. On Windows, PowerShell reports `Cannot find path` and Command Prompt reports `The system cannot find the path specified`.
+- `node server.js` reports `Error: Cannot find module`, followed by a path that ends in `server.js`.
+- `npm start` reports `code ENOENT` and a path that ends in `package.json`. Newer npm versions also print `Could not read package.json`.
+
+Change into the project folder as described in [Installation](#installation), then run the command again.
 
 **curl reports `Failed to connect to localhost port 3000`.** The server is not running, or it listens on another port. Start it as described in [Running the server](#running-the-server), and use the port from its `Server listening on port` line in the URL.
