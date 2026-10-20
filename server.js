@@ -154,10 +154,6 @@ function trackResponse(openConnections, request, response) {
 
 // Rejects a CONNECT without tunnelling: logs it, sends the fixed 404 once earlier responses flush, then times it out.
 function handleConnect(openConnections, request, socket) {
-  // A socket handed to the 'connect' event has no error handler, so a client reset would crash the process.
-  // A reset on a rejected tunnel is a client-side event, not a server fault, so nothing is written to stderr.
-  // The listener goes on first, because the reply may have to wait for earlier responses.
-  socket.on('error', () => socket.destroy());
   // Node.js emits CONNECT on the 'connect' event, never on 'request'. With no listener it closes the socket
   // without any response, which would skip both the request log and the catch-all 404.
   logRequest(request.method, getRequestPath(request.url));
@@ -167,6 +163,10 @@ function handleConnect(openConnections, request, socket) {
   // The reply goes straight to the socket, so the socket itself is the connection's latest output. Shutdown
   // therefore waits for the socket's own 'finish', which follows the reply.
   openConnections.set(socket, socket);
+  // A socket handed to the 'connect' event has no error handler, so a client reset would crash the process.
+  // A reset on a rejected tunnel is a client-side event, not a server fault, so nothing is written to stderr.
+  // The listener is attached before the reply is written or deferred, because the reply may wait for earlier responses.
+  socket.on('error', () => socket.destroy());
   // The socket has left Node.js's HTTP response machinery, so the 404 is written as a raw HTTP/1.1 message
   // instead of through sendText. It is written only while the connection is still open and tracked.
   const reply = () => {
