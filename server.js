@@ -224,6 +224,10 @@ function startServer(port) {
   const server = http.createServer(handleRequest);
   // Registered after handleRequest, so it runs once the response has been written.
   server.on('request', (request, response) => trackResponse(openConnections, request, response));
+  // Node.js answers an Expect value other than 100-continue with an empty 417 and skips 'request', unless a
+  // 'checkExpectation' listener exists. Re-emitting it on 'request' routes such a request like any other,
+  // through handleRequest and then trackResponse, without reading the header.
+  server.on('checkExpectation', (request, response) => server.emit('request', request, response));
   server.on('connect', (request, socket) => handleConnect(openConnections, request, socket));
   server.on('connection', (socket) => trackConnection(openConnections, socket));
   server.on('error', (error) => handleServerError(error, port, server, openConnections));
