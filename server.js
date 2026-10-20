@@ -256,7 +256,11 @@ function stopServer(server, openConnections, exitCode) {
   if (process.exitCode !== 1) {
     process.exitCode = exitCode;
   }
-  server.close();
+  // From Node.js 19, http.Server's close() first destroys each connection waiting between requests unless its
+  // response is unended, cutting off an ended but unflushed response and the pipelined ones behind it. net.Server's
+  // close(), which it inherits, stops only the listener, so new connections are refused and closeWhenFlushed alone
+  // closes each connection. Node.js 18.0.0 closes alike; the unref'd timeout-check interval cannot delay exit.
+  Object.getPrototypeOf(http.Server.prototype).close.call(server);
   for (const socket of openConnections.keys()) {
     closeWhenFlushed(openConnections, socket);
   }
